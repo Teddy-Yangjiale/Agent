@@ -41,7 +41,8 @@ class SandboxConfig:
         "UnicodeDecodeError", "UnicodeEncodeError", "UnicodeTranslateError",
     ])
     docker_image: str = "python:3.11-slim"
-    use_docker: bool = False
+    use_docker: bool = True
+    fallback_to_restricted: bool = True
 
 
 @dataclass
@@ -60,7 +61,13 @@ class SandboxedExecutor:
 
     async def execute(self, code: str) -> SandboxResult:
         if self._config.use_docker:
-            return await self._execute_docker(code)
+            result = await self._execute_docker(code)
+            if (
+                result.error == "Docker not found — set use_docker=False for restricted mode"
+                and self._config.fallback_to_restricted
+            ):
+                return await self._execute_restricted(code)
+            return result
         return await self._execute_restricted(code)
 
     async def _execute_restricted(self, code: str) -> SandboxResult:

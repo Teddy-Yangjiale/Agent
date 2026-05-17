@@ -1,14 +1,8 @@
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from openai import AsyncOpenAI
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
 
-from agent_harness.llm.base import BaseLLM, ChatMessage, LLMResponse, ToolCall, ToolDefinition
+from agent_harness.llm.base import BaseLLM, ChatMessage, LLMClientConfig, LLMResponse, ToolDefinition
 
 
 class OpenAILLM(BaseLLM):
@@ -22,24 +16,34 @@ class OpenAILLM(BaseLLM):
         temperature: float = 0.0,
         max_tokens: int = 4096,
         max_retries: int = 3,
+        timeout_seconds: float = 60.0,
+        client_config: Optional[LLMClientConfig] = None,
     ):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self._max_retries = max_retries
+        self.client_config = client_config or LLMClientConfig(
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+        )
         self._client = AsyncOpenAI(
             api_key=api_key or "sk-placeholder",
             base_url=base_url or "https://api.openai.com/v1",
             max_retries=0,
+            timeout=self.client_config.timeout_seconds,
         )
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=30),
-        retry=retry_if_exception_type((Exception,)),
-        reraise=True,
-    )
     async def agenerate(
+        self,
+        messages: List[ChatMessage],
+        tools: Optional[List[ToolDefinition]] = None,
+        **kwargs,
+    ) -> LLMResponse:
+        return await self._run_with_retries(
+            lambda: self._agenerate_once(messages=messages, tools=tools, **kwargs)
+        )
+
+    async def _agenerate_once(
         self,
         messages: List[ChatMessage],
         tools: Optional[List[ToolDefinition]] = None,
@@ -83,18 +87,26 @@ class OpenAILLM(BaseLLM):
             raw=response,
         )
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=30),
-        retry=retry_if_exception_type((Exception,)),
-        reraise=True,
-    )
     async def astream(
         self,
         messages: List[ChatMessage],
         tools: Optional[List[ToolDefinition]] = None,
         **kwargs,
     ) -> AsyncIterator[str]:
+        stream = await self._run_with_retries(
+            lambda: self._create_stream(messages=messages, tools=tools, **kwargs)
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
+    async def _create_stream(
+        self,
+        messages: List[ChatMessage],
+        tools: Optional[List[ToolDefinition]] = None,
+        **kwargs,
+    ):
         openai_messages = [m.model_dump(exclude_none=True) for m in messages]
         params: Dict[str, Any] = {
             "model": self.model,
@@ -107,8 +119,4 @@ class OpenAILLM(BaseLLM):
         if tools:
             params["tools"] = [t.model_dump() for t in tools]
 
-        stream = await self._client.chat.completions.create(**params)
-        async for chunk in stream:
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if delta and delta.content:
-                yield delta.content
+        return await self._client.chat.completions.create(**params)

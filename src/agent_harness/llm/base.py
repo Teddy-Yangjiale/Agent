@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from pydantic import BaseModel
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 
 @dataclass
@@ -39,12 +40,39 @@ class ToolDefinition(BaseModel):
     function: Dict[str, Any]
 
 
+@dataclass
+class LLMClientConfig:
+    """Shared timeout and retry policy for LLM providers."""
+
+    timeout_seconds: float = 60.0
+    max_retries: int = 3
+    retry_min_seconds: float = 1.0
+    retry_max_seconds: float = 30.0
+    retry_exceptions: tuple[type[BaseException], ...] = (Exception,)
+
+
 class BaseLLM(ABC):
     """LLM 抽象层 — 统一不同提供商的接口"""
 
     model: str = ""
     temperature: float = 0.0
     max_tokens: int = 4096
+    client_config: LLMClientConfig = LLMClientConfig()
+
+    async def _run_with_retries(self, operation):
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(self.client_config.max_retries),
+            wait=wait_exponential(
+                multiplier=1,
+                min=self.client_config.retry_min_seconds,
+                max=self.client_config.retry_max_seconds,
+            ),
+            retry=retry_if_exception_type(self.client_config.retry_exceptions),
+            reraise=True,
+        ):
+            with attempt:
+                return await operation()
+        raise RuntimeError("LLM retry loop exited without result")
 
     @abstractmethod
     async def agenerate(

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -18,32 +19,55 @@ from agent_harness.agents.base import AgentAction, AgentInput, AgentOutput, Agen
 class AgentAPI:
     """Agent Web API Server"""
 
-    def __init__(self, executor: AgentExecutor, title: str = "Agent Harness"):
+    def __init__(self, executor: AgentExecutor, title: str = "Agent Harness", api_key: str = ""):
         self._executor = executor
+        self._api_key = api_key or os.getenv("AGENT_HARNESS_API_KEY", "")
         self._app = FastAPI(title=title)
         self._connections: Dict[str, WebSocket] = {}
         self._run_history: List[dict] = []
         self._setup_routes()
 
+    @property
+    def app(self) -> FastAPI:
+        return self._app
+
+    async def _require_auth(self, x_api_key: Optional[str] = Header(default=None)) -> None:
+        if self._api_key and x_api_key != self._api_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or missing API key",
+            )
+
+    async def _authorize_websocket(self, ws: WebSocket, token: Optional[str]) -> bool:
+        if not self._api_key:
+            return True
+        header_key = ws.headers.get("x-api-key")
+        if token == self._api_key or header_key == self._api_key:
+            return True
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+        return False
+
     def _setup_routes(self):
         @self._app.get("/")
-        async def dashboard():
+        async def dashboard(_: None = Depends(self._require_auth)):
             return HTMLResponse(content=self._dashboard_html())
 
         @self._app.get("/api/health")
-        async def health():
+        async def health(_: None = Depends(self._require_auth)):
             return {"status": "ok", "agent": self._executor.agent.name, "tools": len(self._executor.tools)}
 
         @self._app.get("/api/tools")
-        async def list_tools():
+        async def list_tools(_: None = Depends(self._require_auth)):
             return {"tools": [{"name": t.name, "description": t.description} for t in self._executor.tools.list_all()]}
 
         @self._app.get("/api/history")
-        async def history():
+        async def history(_: None = Depends(self._require_auth)):
             return {"runs": self._run_history[-20:]}
 
         @self._app.websocket("/ws")
-        async def websocket_endpoint(ws: WebSocket):
+        async def websocket_endpoint(ws: WebSocket, token: Optional[str] = Query(default=None)):
+            if not await self._authorize_websocket(ws, token):
+                return
             await ws.accept()
             conn_id = uuid.uuid4().hex[:8]
             self._connections[conn_id] = ws

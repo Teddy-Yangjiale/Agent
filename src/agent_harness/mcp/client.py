@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import httpx
+import yaml
 
 from agent_harness.tools.base import BaseTool, ToolMetadata
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -29,6 +34,14 @@ class MCPToolInfo:
     server_name: str = ""
 
 
+@dataclass
+class MCPErrorEvent:
+    server_name: str
+    operation: str
+    message: str
+    exception_type: str = ""
+
+
 class MCPClient:
     def __init__(self, server_configs: Optional[List[MCPServerConfig]] = None):
         self._servers: Dict[str, MCPServerConfig] = {}
@@ -37,6 +50,7 @@ class MCPClient:
         self._stdio_processes: Dict[str, asyncio.subprocess.Process] = {}
         self._stdio_rpc_id: Dict[str, int] = {}
         self._stdio_pending: Dict[str, Dict[int, asyncio.Future]] = {}
+        self._errors: List[MCPErrorEvent] = []
         if server_configs:
             for cfg in server_configs:
                 self.add_server(cfg)
@@ -50,8 +64,8 @@ class MCPClient:
         if proc:
             try:
                 proc.terminate()
-            except Exception:
-                pass
+            except Exception as e:
+                self._record_error(name, "remove_server", str(e), e)
 
     async def connect(self) -> None:
         if not self._http_client:
@@ -110,8 +124,8 @@ class MCPClient:
                         input_schema=tool_info.get("inputSchema", {}),
                         server_name=server_name,
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            self._record_error(server_name, "connect_stdio", str(e), e)
 
     async def _read_stdio(self, server_name: str, proc: asyncio.subprocess.Process) -> None:
         try:
@@ -126,10 +140,10 @@ class MCPClient:
                         fut = self._stdio_pending[server_name].pop(req_id, None)
                         if fut and not fut.done():
                             fut.set_result(data)
-                except json.JSONDecodeError:
-                    pass
-        except Exception:
-            pass
+                except json.JSONDecodeError as e:
+                    self._record_error(server_name, "read_stdio_decode", str(e), e)
+        except Exception as e:
+            self._record_error(server_name, "read_stdio", str(e), e)
 
     async def _send_stdio(self, server_name: str, message: dict) -> None:
         proc = self._stdio_processes.get(server_name)
@@ -146,7 +160,8 @@ class MCPClient:
         await self._send_stdio(server_name, message)
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
+            self._record_error(server_name, message.get("method", "rpc"), "MCP stdio request timed out", e)
             return None
 
     async def _discover_http_tools(self, server_name: str, config: MCPServerConfig) -> None:
@@ -165,8 +180,8 @@ class MCPClient:
                         input_schema=tool_info.get("inputSchema", {}),
                         server_name=server_name,
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            self._record_error(server_name, "discover_http_tools", str(e), e)
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: Dict[str, Any]) -> Any:
         config = self._servers.get(server_name)
@@ -208,6 +223,35 @@ class MCPClient:
     def get_discovered_tools(self) -> List[MCPToolInfo]:
         return list(self._tools.values())
 
+    @property
+    def errors(self) -> List[MCPErrorEvent]:
+        return list(self._errors)
+
+    def clear_errors(self) -> None:
+        self._errors.clear()
+
+    def _record_error(
+        self,
+        server_name: str,
+        operation: str,
+        message: str,
+        exc: Optional[BaseException] = None,
+    ) -> None:
+        event = MCPErrorEvent(
+            server_name=server_name,
+            operation=operation,
+            message=message,
+            exception_type=type(exc).__name__ if exc else "",
+        )
+        self._errors.append(event)
+        logger.warning(
+            "mcp.%s failed for server=%s: %s",
+            operation,
+            server_name,
+            message,
+            exc_info=bool(exc),
+        )
+
     async def close(self) -> None:
         if self._http_client:
             await self._http_client.aclose()
@@ -217,8 +261,8 @@ class MCPClient:
             if proc:
                 try:
                     proc.terminate()
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._record_error(name, "close", str(e), e)
 
 
 class MCPToolAdapter(BaseTool):
@@ -248,3 +292,23 @@ async def discover_and_load_mcp_tools(client: MCPClient, server_configs: List[MC
     for info in client.get_discovered_tools():
         tools.append(MCPToolAdapter(client, info.server_name, info))
     return tools
+
+
+async def load_mcp_tools_from_config(config_path: str, client: Optional[MCPClient] = None) -> List[BaseTool]:
+    with open(config_path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    servers = raw.get("servers", raw if isinstance(raw, list) else [])
+    server_configs = [
+        MCPServerConfig(
+            name=item["name"],
+            command=item.get("command", ""),
+            args=item.get("args", []),
+            env=item.get("env", {}),
+            url=item.get("url", ""),
+            transport=item.get("transport", "stdio"),
+        )
+        for item in servers
+    ]
+    mcp_client = client or MCPClient()
+    return await discover_and_load_mcp_tools(mcp_client, server_configs)

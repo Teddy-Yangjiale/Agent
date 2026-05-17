@@ -10,8 +10,13 @@ Agent Harness 是一个面向生产化演进的 Python Agent 框架。它参考 
 
 - `AgentExecutor` 会聚合每轮 LLM 返回的 token usage。
 - `allowed_tools` 现在会在普通执行和流式执行中生效。
+- 工具调用入口会基于声明的 JSON Schema 做 Pydantic 参数校验。
+- LLM 调用使用统一的 `LLMClientConfig` 管理重试和超时。
+- MCP 客户端会记录结构化错误事件，便于日志和监控接入。
+- Web API 支持 `x-api-key` 鉴权。
 - 带路径参数的工具会在执行前经过 `PermissionManager` 检查。
 - 路径权限使用真实路径边界判断，避免 `C:\tmp` 误放行 `C:\tmp2`。
+- 沙箱默认优先使用 Docker 隔离；Docker 不可用时可回退到 restricted 模式。
 - restricted sandbox 增加 AST 预检，拒绝循环、dunder 属性等高风险结构。
 - 新增离线单元测试覆盖执行器、权限和沙箱的核心行为。
 
@@ -130,6 +135,35 @@ permissions = PermissionManager().set_policy(
 | 评估 | `evaluation` | 基础 benchmark runner |
 | 可观测性 | `callbacks` / `tracing` | 日志、token 统计、流式输出、OpenTelemetry |
 
+## LLM 超时和重试
+
+```python
+from agent_harness.llm import DeepSeekLLM, LLMClientConfig
+
+llm = DeepSeekLLM(
+    api_key="sk-your-key",
+    client_config=LLMClientConfig(
+        timeout_seconds=45,
+        max_retries=2,
+        retry_min_seconds=1,
+        retry_max_seconds=10,
+    ),
+)
+```
+
+## Web API 鉴权
+
+```powershell
+$env:AGENT_HARNESS_API_KEY = "local-secret"
+agent-harness serve
+```
+
+启用后，请求需要携带：
+
+```text
+x-api-key: local-secret
+```
+
 ## 架构
 
 ```text
@@ -159,15 +193,18 @@ python -m pytest -q
 - `allowed_tools` 工具白名单。
 - 路径权限执行前拦截。
 - 路径边界判断。
+- 工具参数校验。
+- LLM 重试策略。
+- MCP 错误记录。
+- Web API 鉴权。
 - restricted sandbox 基础执行和高风险循环拒绝。
 
 ## 生产化路线
 
 优先级从高到低：
 
-1. 给所有工具输入增加 Pydantic 校验和清晰错误返回。
-2. 将 restricted sandbox 替换为默认 Docker/进程级隔离，避免主进程被用户代码影响。
-3. MCP 层移除静默 `except Exception: pass`，补齐超时、重试、错误事件和日志。
-4. 给 Web API 增加认证、限流、审计日志和多会话隔离。
-5. 建立 CI：`ruff`、`mypy`、`pytest`、安全扫描。
-6. 增加真实评估集和回归基准，覆盖多步工具调用、失败恢复、权限拒绝、长上下文任务。
+1. 给 Web API 增加限流、审计日志和多会话隔离。
+2. 将 Docker sandbox 的镜像、资源限制和挂载策略做成生产配置模板。
+3. 继续移除静默异常，补齐 MCP stderr 采集、进程退出检测和重连策略。
+4. 建立更严格的 CI：`ruff`、逐步收紧 `mypy`、安全扫描。
+5. 增加真实评估集和回归基准，覆盖多步工具调用、失败恢复、权限拒绝、长上下文任务。

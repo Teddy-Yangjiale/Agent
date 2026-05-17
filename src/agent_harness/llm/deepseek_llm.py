@@ -1,5 +1,6 @@
 from typing import Optional
 
+from agent_harness.llm.base import LLMClientConfig
 from agent_harness.llm.openai_llm import OpenAILLM
 
 
@@ -13,6 +14,8 @@ class DeepSeekLLM(OpenAILLM):
         temperature: float = 0.0,
         max_tokens: int = 4096,
         max_retries: int = 3,
+        timeout_seconds: float = 60.0,
+        client_config: Optional[LLMClientConfig] = None,
     ):
         super().__init__(
             model=model,
@@ -21,4 +24,6 @@ class DeepSeekLLM(OpenAILLM):
             temperature=temperature,
             max_tokens=max_tokens,
             max_retries=max_retries,
+            timeout_seconds=timeout_seconds,
+            client_config=client_config,
         )
