@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import time
 import uuid
 
-from agent_harness.agents.base import AgentAction, AgentStep
+from agent_harness.agents.base import AgentStep
 
 
 @dataclass
@@ -55,7 +55,7 @@ class CallbackManager:
             if handler:
                 try:
                     await handler(event)
-                except Exception as e:
+                except Exception:
                     if handler.__code__.co_name != "on_llm_token":
                         pass
 

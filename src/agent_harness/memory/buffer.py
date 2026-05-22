@@ -1,5 +1,5 @@
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from agent_harness.memory.base import BaseMemory, Message
 

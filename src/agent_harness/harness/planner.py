@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List
 
 from agent_harness.agents.base import AgentInput, AgentStep
-from agent_harness.llm.base import BaseLLM, ChatMessage
+from agent_harness.llm.base import ChatMessage
 
 
 class Planner(ABC):

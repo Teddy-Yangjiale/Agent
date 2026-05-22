@@ -1,6 +1,5 @@
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
 
 from agent_harness.tools.base import BaseTool
 

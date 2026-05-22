@@ -1,11 +1,10 @@
 import json
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agent_harness.agents.base import AgentAction, AgentStep
+from agent_harness.agents.base import AgentStep
 
 
 @dataclass

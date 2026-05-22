@@ -19,7 +19,6 @@ from agent_harness.harness.callbacks import (
 )
 from agent_harness.memory.base import BaseMemory
 from agent_harness.security.permissions import PermissionManager
-from agent_harness.tools.base import BaseTool
 from agent_harness.tools.registry import ToolRegistry
 
 

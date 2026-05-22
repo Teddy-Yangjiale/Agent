@@ -1,5 +1,5 @@
 import json
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, List
 
 from agent_harness.agents.base import (
     AgentAction,

@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import time
 import uuid
-from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 
 from agent_harness import AgentExecutor
-from agent_harness.agents.base import AgentAction, AgentInput, AgentOutput, AgentStep
+from agent_harness.agents.base import AgentAction, AgentStep
 
 
 class AgentAPI:
